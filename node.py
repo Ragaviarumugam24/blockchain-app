@@ -1,36 +1,34 @@
-# node.py
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, render_template
 from flask_cors import CORS
 from uuid import uuid4
 from blockchain import Blockchain
 
 app = Flask(__name__)
-CORS(app)  # ✅ NEW
+CORS(app)
 
-# Generate a globally unique address for this node (used as miner id)
 node_identifier = str(uuid4()).replace('-', '')
-
-# Instantiate the Blockchain
 blockchain = Blockchain()
+
+
+# ✅ Home route
+@app.route('/')
+def index():
+    return render_template('index.html')
 
 
 @app.route('/mine', methods=['GET'])
 def mine():
-    # We run the proof of work algorithm to get the next proof
     last_block = blockchain.last_block
     last_proof = last_block['proof']
     last_hash = blockchain.hash(last_block)
     proof = blockchain.proof_of_work(last_proof, last_hash)
 
-    # We must receive a reward for finding the proof.
-    # The sender is "0" to signify that this node has mined a new coin.
     blockchain.new_transaction(
         sender="0",
         recipient=node_identifier,
         amount=1,
     )
 
-    # Forge the new Block by adding it to the chain
     block = blockchain.new_block(proof, previous_hash=last_hash)
 
     response = {
@@ -94,9 +92,8 @@ def consensus():
 
 
 if __name__ == '__main__':
-    # Run with: python node.py -p 5000
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('-p', '--port', default=5000, type=int, help='port to listen on')
-    args = parser.parse_args()
+    args = parser.parse_args()   # ✅ correct method
     app.run(host='0.0.0.0', port=args.port)
