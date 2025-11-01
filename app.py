@@ -1,40 +1,96 @@
-from flask import Flask, render_template, request, redirect, url_for
-import requests
+from flask import Flask, jsonify, request, render_template, redirect, url_for
+from flask_cors import CORS
+from uuid import uuid4
+from blockchain import Blockchain
 import json
+import os
 
 app = Flask(__name__)
+CORS(app)
 
-NODE_URL = "http://127.0.0.1:5000"  # Change to your node URL
+node_identifier = str(uuid4()).replace('-', '')
+blockchain = Blockchain()
 
+# ===============================
+# 🌍 FRONTEND ROUTES
+# ===============================
 @app.route('/')
 def index():
-    try:
-        chain = requests.get(f"{NODE_URL}/chain").json()
-        nodes = requests.get(f"{NODE_URL}/nodes/list").json() if "nodes/list" in locals() else {"nodes": []}
-        pending = requests.get(f"{NODE_URL}/transactions/pending").json() if "transactions/pending" in locals() else {"transactions": []}
-        return render_template('index.html', chain=chain, nodes=nodes, pending=pending)
-    except Exception as e:
-        return f"Error fetching blockchain data: {e}"
-
-@app.route('/mine', methods=['POST'])
-def mine():
-    requests.get(f"{NODE_URL}/mine")
-    return redirect(url_for('index'))
+    chain_data = {
+        'chain': blockchain.chain,
+        'length': len(blockchain.chain),
+    }
+    return render_template('index.html', chain=chain_data)
 
 @app.route('/add_transaction', methods=['POST'])
 def add_transaction():
     sender = request.form['sender']
     recipient = request.form['recipient']
     amount = request.form['amount']
-    tx = {'sender': sender, 'recipient': recipient, 'amount': int(amount)}
-    headers = {'Content-Type': 'application/json'}
-    requests.post(f"{NODE_URL}/transactions/new", data=json.dumps(tx), headers=headers)
+
+    tx = {
+        'sender': sender,
+        'recipient': recipient,
+        'amount': int(amount)
+    }
+    blockchain.new_transaction(sender, recipient, int(amount))
+    return redirect(url_for('index'))
+
+@app.route('/mine', methods=['POST'])
+def mine():
+    last_block = blockchain.last_block
+    last_proof = last_block['proof']
+    last_hash = blockchain.hash(last_block)
+    proof = blockchain.proof_of_work(last_proof, last_hash)
+
+    blockchain.new_transaction(
+        sender="0",
+        recipient=node_identifier,
+        amount=1,
+    )
+    block = blockchain.new_block(proof, previous_hash=last_hash)
     return redirect(url_for('index'))
 
 @app.route('/resolve', methods=['POST'])
 def resolve():
-    requests.get(f"{NODE_URL}/nodes/resolve")
+    blockchain.resolve_conflicts()
     return redirect(url_for('index'))
 
-if __name__ == "__main__":
-    app.run(port=8000, debug=True)
+
+# ===============================
+# ⚙️ BACKEND API ROUTES
+# ===============================
+@app.route('/chain', methods=['GET'])
+def full_chain():
+    return jsonify({
+        'chain': blockchain.chain,
+        'length': len(blockchain.chain),
+    }), 200
+
+@app.route('/transactions/new', methods=['POST'])
+def new_transaction_api():
+    values = request.get_json(force=True)
+    required = ['sender', 'recipient', 'amount']
+    if not all(k in values for k in required):
+        return 'Missing values', 400
+
+    index = blockchain.new_transaction(values['sender'], values['recipient'], values['amount'])
+    return jsonify({'message': f'Transaction will be added to Block {index}'}), 201
+
+@app.route('/mine_block', methods=['GET'])
+def mine_block():
+    last_block = blockchain.last_block
+    last_proof = last_block['proof']
+    last_hash = blockchain.hash(last_block)
+    proof = blockchain.proof_of_work(last_proof, last_hash)
+    blockchain.new_transaction(sender="0", recipient=node_identifier, amount=1)
+    block = blockchain.new_block(proof, previous_hash=last_hash)
+    return jsonify(block), 200
+
+
+# ===============================
+# 🚀 MAIN ENTRY POINT
+# ===============================
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))  # Railway sets PORT automatically
+    app.run(host='0.0.0.0', port=port)
