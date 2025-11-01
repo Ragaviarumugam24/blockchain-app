@@ -1,96 +1,114 @@
-from flask import Flask, jsonify, request, render_template, redirect, url_for
-from flask_cors import CORS
+from flask import Flask, jsonify, request
 from uuid import uuid4
-from blockchain import Blockchain
-import json
-import os
+from time import time
+import hashlib
+from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
 
-node_identifier = str(uuid4()).replace('-', '')
+class Blockchain:
+    def __init__(self):
+        self.chain = []
+        self.current_transactions = []
+        self.new_block(previous_hash='1', proof=100)
+
+    def new_block(self, proof, previous_hash=None):
+        block = {
+            'index': len(self.chain) + 1,
+            'timestamp': time(),
+            'transactions': self.current_transactions,
+            'proof': proof,
+            'previous_hash': previous_hash or self.hash(self.chain[-1]),
+        }
+        self.current_transactions = []
+        self.chain.append(block)
+        return block
+
+    def new_transaction(self, sender, recipient, amount):
+        self.current_transactions.append({
+            'sender': sender,
+            'recipient': recipient,
+            'amount': amount,
+        })
+        return self.last_block['index'] + 1
+
+    @staticmethod
+    def hash(block):
+        block_string = str(block).encode()
+        return hashlib.sha256(block_string).hexdigest()
+
+    @property
+    def last_block(self):
+        return self.chain[-1]
+
+    def proof_of_work(self, last_proof):
+        proof = 0
+        while self.valid_proof(last_proof, proof) is False:
+            proof += 1
+        return proof
+
+    @staticmethod
+    def valid_proof(last_proof, proof):
+        guess = f'{last_proof}{proof}'.encode()
+        guess_hash = hashlib.sha256(guess).hexdigest()
+        return guess_hash[:4] == "0000"
+
+
 blockchain = Blockchain()
+node_identifier = str(uuid4()).replace('-', '')
 
-# ===============================
-# 🌍 FRONTEND ROUTES
-# ===============================
-@app.route('/')
-def index():
-    chain_data = {
-        'chain': blockchain.chain,
-        'length': len(blockchain.chain),
-    }
-    return render_template('index.html', chain=chain_data)
 
-@app.route('/add_transaction', methods=['POST'])
-def add_transaction():
-    sender = request.form['sender']
-    recipient = request.form['recipient']
-    amount = request.form['amount']
-
-    tx = {
-        'sender': sender,
-        'recipient': recipient,
-        'amount': int(amount)
-    }
-    blockchain.new_transaction(sender, recipient, int(amount))
-    return redirect(url_for('index'))
-
-@app.route('/mine', methods=['POST'])
+@app.route('/mine', methods=['GET'])
 def mine():
     last_block = blockchain.last_block
     last_proof = last_block['proof']
-    last_hash = blockchain.hash(last_block)
-    proof = blockchain.proof_of_work(last_proof, last_hash)
+    proof = blockchain.proof_of_work(last_proof)
 
     blockchain.new_transaction(
         sender="0",
         recipient=node_identifier,
         amount=1,
     )
-    block = blockchain.new_block(proof, previous_hash=last_hash)
-    return redirect(url_for('index'))
 
-@app.route('/resolve', methods=['POST'])
-def resolve():
-    blockchain.resolve_conflicts()
-    return redirect(url_for('index'))
+    previous_hash = blockchain.hash(last_block)
+    block = blockchain.new_block(proof, previous_hash)
 
+    response = {
+        'message': "New Block Forged",
+        'index': block['index'],
+        'transactions': block['transactions'],
+        'proof': block['proof'],
+        'previous_hash': block['previous_hash'],
+    }
+    return jsonify(response), 200
 
-# ===============================
-# ⚙️ BACKEND API ROUTES
-# ===============================
-@app.route('/chain', methods=['GET'])
-def full_chain():
-    return jsonify({
-        'chain': blockchain.chain,
-        'length': len(blockchain.chain),
-    }), 200
 
 @app.route('/transactions/new', methods=['POST'])
-def new_transaction_api():
-    values = request.get_json(force=True)
+def new_transaction():
+    values = request.get_json()
     required = ['sender', 'recipient', 'amount']
     if not all(k in values for k in required):
         return 'Missing values', 400
-
     index = blockchain.new_transaction(values['sender'], values['recipient'], values['amount'])
-    return jsonify({'message': f'Transaction will be added to Block {index}'}), 201
-
-@app.route('/mine_block', methods=['GET'])
-def mine_block():
-    last_block = blockchain.last_block
-    last_proof = last_block['proof']
-    last_hash = blockchain.hash(last_block)
-    proof = blockchain.proof_of_work(last_proof, last_hash)
-    blockchain.new_transaction(sender="0", recipient=node_identifier, amount=1)
-    block = blockchain.new_block(proof, previous_hash=last_hash)
-    return jsonify(block), 200
+    response = {'message': f'Transaction will be added to Block {index}'}
+    return jsonify(response), 201
 
 
-# ===============================
-# 🚀 MAIN ENTRY POINT
-# ===============================
+@app.route('/chain', methods=['GET'])
+def full_chain():
+    response = {
+        'chain': blockchain.chain,
+        'length': len(blockchain.chain),
+    }
+    return jsonify(response), 200
+
+
+@app.route('/nodes/resolve', methods=['GET'])
+def consensus():
+    response = {'message': 'Our chain is authoritative'}
+    return jsonify(response), 200
+
+
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))  # Railway sets PORT automatically
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=5000)
